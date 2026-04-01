@@ -1,6 +1,6 @@
 # PayGraph
 
-[![Tests](https://github.com/Allenbrd/paygraph/actions/workflows/test.yml/badge.svg)](https://github.com/Allenbrd/paygraph/actions/workflows/test.yml)
+[![Tests](https://github.com/paygraph-ai/paygraph/actions/workflows/test.yml/badge.svg)](https://github.com/paygraph-ai/paygraph/actions/workflows/test.yml)
 
 **Open-source spend governance for AI agents.** Issue single-use virtual cards or pay x402-enabled APIs with USDC — with policy enforcement, audit logging, and human-in-the-loop approval.
 
