@@ -19,7 +19,7 @@ paygraph = "paygraph.cli:main"
 
 [project.urls]
 Homepage = "https://paygraph.dev"
-Repository = "https://github.com/Allenbrd/paygraph"
+Repository = "https://github.com/paygraph-ai/paygraph"
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]

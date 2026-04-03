@@ -82,6 +82,15 @@ wallet = AgentWallet(
 """
     )
 
+    print("⭐  Like PayGraph? Star us → github.com/paygraph-ai/paygraph")
+    print()
+    print("📣  Share your first run:")
+    print("    I just tried PayGraph — open-source spend control for AI agents.")
+    print("    Agent requested $4.20 → policy approved → virtual card minted.")
+    print("    pip install paygraph && paygraph demo")
+    print("    github.com/paygraph-ai/paygraph")
+    print()
+
 
 def run_live_demo(model: str, stripe: bool = False) -> None:
     """Run a live LangGraph agent demo with a real LLM."""
@@ -231,6 +240,15 @@ def run_live_demo(model: str, stripe: bool = False) -> None:
     # Show audit log path
     print()
     print(f"  {_DIM}Audit log: {audit_path}{_RESET}")
+    print()
+
+    print("⭐  Like PayGraph? Star us → github.com/paygraph-ai/paygraph")
+    print()
+    print("📣  Share your first run:")
+    print("    I just tried PayGraph — open-source spend control for AI agents.")
+    print("    Agent requested $4.20 → policy approved → virtual card minted.")
+    print("    pip install paygraph && paygraph demo")
+    print("    github.com/paygraph-ai/paygraph")
     print()
 
     os.unlink(audit_path)
