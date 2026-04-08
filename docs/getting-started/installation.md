@@ -35,7 +35,7 @@ Adds the Coinbase x402 SDK with EVM and Solana signers for on-chain USDC payment
 ## For Development
 
 ```bash
-git clone https://github.com/Allenbrd/paygraph.git
+git clone https://github.com/paygraph-ai/paygraph.git
 cd paygraph
 pip install -e ".[langgraph]" pytest
 ```

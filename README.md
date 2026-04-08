@@ -7,7 +7,7 @@
 ## Architecture
 
 ```
- Agent (LangGraph / any framework)
+ Agent (LangGraph / CrewAI / any framework)
    │
    ▼
  ┌────────────────────────────────────────┐
@@ -16,11 +16,11 @@
  │  │ Policy Engine│  │ Audit Logger │    │
  │  └──────┬───────┘  └──────┬───────┘    │
  │         │                 │            │
- │  ┌──────▼─────────────────▼───────┐    │
- │  │         Payment Rails          │    │
- │  │  Card: Mock │ Stripe           │    │
- │  │  x402: X402Gateway │ MockX402  │    │
- │  └────────────────────────────────┘    │
+ │  ┌──────▼─────────────────▼─────────┐  │
+ │  │           Payment Rails          │  │
+ │  │  Card: Mock │ Stripe │ StripeMPP │  │
+ │  │  x402: X402Gateway │ MockX402    │  │
+ │  └──────────────────────────────────┘  │
  └────────────────────────────────────────┘
 ```
 
@@ -34,6 +34,12 @@ With LangGraph support:
 
 ```bash
 pip install paygraph[langgraph]
+```
+
+With CrewAI support:
+
+```bash
+pip install paygraph[crewai]
 ```
 
 With x402 support (EVM + Solana USDC payments):
@@ -101,6 +107,42 @@ result = wallet.request_spend(
 
 When `single_use=False`, a single card is created on the first spend and reused for subsequent calls (spending limit is updated each time).
 
+## StripeMPPGateway (Shared Payment Tokens)
+
+For sellers that accept Stripe machine payments (MPP / agentic commerce), use `StripeMPPGateway` to issue scoped Shared Payment Tokens instead of virtual cards.
+
+> Requires Stripe machine payments access (preview API). See [Stripe docs](https://docs.stripe.com/payments/machine/mpp).
+
+```python
+from paygraph import AgentWallet, SpendPolicy, StripeMPPGateway
+
+wallet = AgentWallet(
+    gateway=StripeMPPGateway(
+        api_key="sk_test_...",
+        payment_method="pm_...",
+        grantee="profile_...",
+    ),
+    policy=SpendPolicy(max_transaction=50.0),
+)
+
+result = wallet.request_spend(
+    amount=4.20,
+    vendor="Anthropic API",
+    justification="API credits for task completion.",
+)
+print(result)  # SPT approved. Token: spt_... (spend limit: $4.20)
+```
+
+### Configuration
+
+| Parameter             | Type   | Default  | Description                                          |
+|-----------------------|--------|----------|------------------------------------------------------|
+| `api_key`             | `str`  | *required* | Stripe secret key (`sk_test_...` or `sk_live_...`) |
+| `payment_method`      | `str`  | *required* | Saved PaymentMethod id (`pm_...`)                  |
+| `grantee`             | `str`  | *required* | Seller identifier (typically `profile_...`)        |
+| `currency`            | `str`  | `"usd"`  | ISO currency code                                    |
+| `expires_in_seconds`  | `int`  | `3600`   | Token lifetime from issuance in seconds              |
+
 ## x402 Gateway (Pay APIs with USDC)
 
 x402 is an HTTP 402-based protocol for machine-to-machine payments. Instead of minting a card, the gateway makes an HTTP request, handles the 402→sign→retry cycle on-chain, and returns the API response.
@@ -159,39 +201,61 @@ tools = [wallet.spend_tool, wallet.x402_tool]
 from langgraph.prebuilt import create_react_agent
 from langchain_anthropic import ChatAnthropic
 
-llm = ChatAnthropic(model="claude-sonnet-4-20250514")
+llm = ChatAnthropic(model="claude-sonnet-4-6")
 agent = create_react_agent(llm, tools=tools)
 result = agent.invoke({"messages": [("user", "Buy $4.20 in API credits from Anthropic")]})
+```
+
+## CrewAI Integration
+
+```bash
+pip install paygraph[crewai]
+```
+
+```python
+from crewai import Agent, Task, Crew
+from paygraph import AgentWallet, SpendPolicy, MockGateway
+
+wallet = AgentWallet(
+    gateway=MockGateway(auto_approve=True),
+    policy=SpendPolicy(max_transaction=25.0),
+)
+
+agent = Agent(
+    role="Purchasing Agent",
+    goal="Buy API credits when needed",
+    tools=[wallet.crewai_tool],
+)
 ```
 
 ## Policy Configuration
 
 `SpendPolicy` accepts the following parameters:
 
-| Parameter              | Type         | Default | Description                                 |
-|------------------------|--------------|---------|---------------------------------------------|
-| `max_transaction`      | `float`      | `100.0` | Maximum amount per transaction (dollars)    |
-| `daily_budget`         | `float`      | `1000.0`| Maximum total spend per day                 |
-| `blocked_vendors`      | `list[str]`  | `[]`    | Vendors that are always denied              |
-| `allowed_vendors`      | `list[str]`  | `[]`    | If set, only these vendors are allowed      |
-| `blocked_mccs`         | `list[str]`  | `[]`    | Blocked merchant category codes             |
-| `require_justification`| `bool`       | `False` | Require non-empty justification string      |
+| Parameter              | Type              | Default | Description                                         |
+|------------------------|-------------------|---------|-----------------------------------------------------|
+| `max_transaction`      | `float`           | `50.0`  | Maximum amount per transaction (dollars)             |
+| `daily_budget`         | `float`           | `200.0` | Maximum total spend per day                          |
+| `allowed_vendors`      | `list[str] \| None` | `None`  | If set, only these vendors are allowed (case-insensitive substring match) |
+| `blocked_vendors`      | `list[str] \| None` | `None`  | Vendors that are always denied (case-insensitive substring match) |
+| `allowed_mccs`         | `list[int] \| None` | `None`  | Merchant category code allowlist                     |
+| `require_justification`| `bool`            | `True`  | Require non-empty justification string               |
 
 ## Environment Variables
 
-| Variable                | Required for            | Description                                  |
-|-------------------------|-------------------------|----------------------------------------------|
-| `ANTHROPIC_API_KEY`     | `--live` (default)      | Anthropic API key for Claude LLM             |
-| `OPENAI_API_KEY`        | `--live --model openai` | OpenAI API key for GPT LLM                  |
-| `STRIPE_API_KEY`        | `--stripe` or `--stripe-mpp` | Stripe secret key (`sk_test_` or `sk_live_`) |
-| `STRIPE_CURRENCY`       | Stripe gateways (optional)   | Currency for Stripe card/SPT limits (default: `usd`) |
-| `STRIPE_BILLING_COUNTRY`| `--stripe` (optional)        | Billing address country code (e.g. `FR`)     |
-| `STRIPE_CARDHOLDER_ID`  | `--stripe` (optional)        | Reuse an existing cardholder ID              |
-| `STRIPE_MPP_PAYMENT_METHOD` | `--stripe-mpp`          | Stripe PaymentMethod id (`pm_...`) used to issue SPTs |
-| `STRIPE_MPP_GRANTEE`    | `--stripe-mpp`               | Seller grantee id (typically `profile_...`)  |
+| Variable | Required for | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | `--live` (default) | Anthropic API key for Claude LLM |
+| `OPENAI_API_KEY` | `--live --model openai` | OpenAI API key for GPT LLM |
+| `STRIPE_API_KEY` | `--stripe` or `--stripe-mpp` | Stripe secret key (`sk_test_` or `sk_live_`) |
+| `STRIPE_CURRENCY` | Stripe gateways (optional) | Currency for card/SPT limits (default: `usd`) |
+| `STRIPE_BILLING_COUNTRY` | `--stripe` (optional) | Billing address country code (e.g. `FR`) |
+| `STRIPE_CARDHOLDER_ID` | `--stripe` (optional) | Reuse an existing cardholder ID |
+| `STRIPE_MPP_PAYMENT_METHOD` | `--stripe-mpp` | PaymentMethod id (`pm_...`) for SPT issuance |
+| `STRIPE_MPP_GRANTEE` | `--stripe-mpp` | Seller grantee id (typically `profile_...`) |
 | `STRIPE_MPP_EXPIRES_IN_SECONDS` | `--stripe-mpp` (optional) | SPT lifetime in seconds (default: `3600`) |
-| `EVM_PRIVATE_KEY`       | x402 (EVM)              | EVM private key for Base/Polygon USDC payments |
-| `SVM_PRIVATE_KEY`       | x402 (Solana)           | Solana private key (base58) for USDC payments |
+| `EVM_PRIVATE_KEY` | x402 (EVM) | EVM private key for Base/Polygon USDC payments |
+| `SVM_PRIVATE_KEY` | x402 (Solana) | Solana private key (base58) for USDC payments |
 
 Copy `.env.example` to `.env` and fill in your keys:
 

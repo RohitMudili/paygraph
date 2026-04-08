@@ -1,8 +1,8 @@
 site_name: PayGraph
 site_description: Open-source spend governance for AI agents
-site_url: https://allenbrd.github.io/paygraph
-repo_url: https://github.com/Allenbrd/paygraph
-repo_name: Allenbrd/paygraph
+site_url: https://paygraph.dev
+repo_url: https://github.com/paygraph-ai/paygraph
+repo_name: paygraph-ai/paygraph
 
 theme:
   name: material
