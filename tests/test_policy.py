@@ -96,6 +96,8 @@ class TestDailyBudget:
         engine = PolicyEngine(SpendPolicy(max_transaction=100.0, daily_budget=100.0))
         r1 = engine.evaluate(60.0, "vendor", "reason")
         assert r1.approved
+        # Simulate a successful gateway: commit the spend before the next check
+        engine.commit_spend(60.0)
         r2 = engine.evaluate(50.0, "vendor", "reason")
         assert not r2.approved
         assert "Daily budget exhausted" in r2.denial_reason
