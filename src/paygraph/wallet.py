@@ -1,8 +1,9 @@
 from functools import cached_property
 
 from paygraph.audit import AuditLogger, AuditRecord
-from paygraph.exceptions import GatewayError, PolicyViolationError, SpendDeniedError
+from paygraph.exceptions import GatewayError, HumanApprovalRequired, PolicyViolationError, SpendDeniedError
 from paygraph.gateways.mock import MockGateway
+from paygraph.gateways.slack import SlackApprovalGateway
 from paygraph.policy import PolicyEngine, SpendPolicy
 
 
@@ -73,6 +74,10 @@ class AgentWallet:
             PolicyViolationError: If the policy engine denies the request.
             SpendDeniedError: If a human denies the request (MockGateway).
             GatewayError: If the gateway API call fails.
+            HumanApprovalRequired: If the amount exceeds
+                ``policy.require_human_approval_above`` and a
+                ``SlackApprovalGateway`` is configured. Resume with
+                ``complete_spend(request_id, approved=True)``.
         """
         # Print header and run policy engine with live check output
         on_check = (
@@ -96,8 +101,27 @@ class AgentWallet:
             )
             raise PolicyViolationError(result.denial_reason)
 
-        # Mint card — commit the budget only after the gateway succeeds
+        # Human approval via Slack (if threshold is configured and gateway supports it)
         amount_cents = int(round(amount * 100))
+        if (
+            self.policy_engine.policy.require_human_approval_above is not None
+            and amount > self.policy_engine.policy.require_human_approval_above
+            and isinstance(self.gateway, SlackApprovalGateway)
+        ):
+            self._audit.log(
+                AuditRecord.now(
+                    agent_id=self.agent_id,
+                    amount=amount,
+                    vendor=vendor,
+                    justification=justification,
+                    policy_result="pending_approval",
+                    checks_passed=result.checks_passed,
+                )
+            )
+            self.gateway.request_approval(amount_cents, vendor, justification)
+            # request_approval always raises HumanApprovalRequired — unreachable
+
+        # Mint card — commit the budget only after the gateway succeeds
         try:
             card = self.gateway.execute_spend(amount_cents, vendor, justification)
         except SpendDeniedError:
@@ -150,6 +174,51 @@ class AgentWallet:
             )
 
         return f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, Expiry: {card.expiry}"
+
+    def complete_spend(self, request_id: str, approved: bool) -> str:
+        """Resume a spend that was paused for human Slack approval.
+
+        Call this after catching ``HumanApprovalRequired`` from
+        ``request_spend()`` and receiving the human's response.
+
+        Args:
+            request_id: The ``request_id`` from the ``HumanApprovalRequired``
+                exception.
+            approved: ``True`` to approve the spend, ``False`` to deny it.
+
+        Returns:
+            Card details string if approved (same format as ``request_spend``).
+
+        Raises:
+            GatewayError: If no ``SlackApprovalGateway`` is configured.
+            SpendDeniedError: If ``approved`` is ``False``.
+        """
+        if not isinstance(self.gateway, SlackApprovalGateway):
+            raise GatewayError("complete_spend requires a SlackApprovalGateway.")
+
+        card = self.gateway.complete_spend(request_id, approved)
+        self._audit.log(
+            AuditRecord.now(
+                agent_id=self.agent_id,
+                amount=card.spend_limit_cents / 100,
+                vendor="(resumed)",
+                justification=None,
+                policy_result="approved",
+                gateway_ref=card.gateway_ref,
+                gateway_type=card.gateway_type,
+            )
+        )
+
+        if card.gateway_type.startswith("stripe_mpp"):
+            return (
+                f"SPT approved. Token: {card.gateway_ref} "
+                f"(spend limit: ${card.spend_limit_cents / 100:.2f})"
+            )
+
+        return (
+            f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, "
+            f"Expiry: {card.expiry}"
+        )
 
     @cached_property
     def spend_tool(self):
@@ -381,6 +450,7 @@ class AgentWallet:
                 headers=headers,
                 body=body,
             )
+            self.policy_engine.commit_spend(amount)
         except SpendDeniedError:
             self._audit.log(
                 AuditRecord.now(
