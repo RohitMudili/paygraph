@@ -10,12 +10,14 @@ from paygraph.gateways.x402 import X402Gateway, X402Receipt
 from paygraph.policy import SpendPolicy
 from paygraph.wallet import AgentWallet
 
-
 # ---------------------------------------------------------------------------
 # Helpers shared by X402Gateway dispatch tests
 # ---------------------------------------------------------------------------
 
-def _fake_receipt(url: str = "https://api.example.com", amount_cents: int = 100) -> X402Receipt:
+
+def _fake_receipt(
+    url: str = "https://api.example.com", amount_cents: int = 100
+) -> X402Receipt:
     return X402Receipt(
         url=url,
         amount_cents=amount_cents,
@@ -207,6 +209,7 @@ class TestRequestX402HttpMethod:
 # X402Gateway sync dispatch tests
 # ---------------------------------------------------------------------------
 
+
 class TestX402GatewaySyncDispatch:
     """execute_x402() must work both with and without a running event loop."""
 
@@ -241,7 +244,9 @@ class TestX402GatewaySyncDispatch:
         gw = _FakeX402Gateway()
 
         async def call_sync_inside_loop() -> X402Receipt:
-            return gw.execute_x402("https://paid-api.example.com", 499, "PaidAPI", "data")
+            return gw.execute_x402(
+                "https://paid-api.example.com", 499, "PaidAPI", "data"
+            )
 
         result = asyncio.run(call_sync_inside_loop())
         assert result.url == "https://paid-api.example.com"
