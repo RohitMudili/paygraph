@@ -154,13 +154,8 @@ class TestGatewayFailureDoesNotConsumeBudget:
         # Budget must still be fully available — the failed spend should not count
         assert wallet.policy_engine._daily_spend == 0.0
 
-        # A subsequent request for the same amount must be approved by policy
-        wallet2, _ = _make_wallet(
-            gateway=MockGateway(auto_approve=True), policy=policy
-        )
-        # Simulate the same engine state (no spend committed)
-        wallet2.policy_engine._daily_spend = wallet.policy_engine._daily_spend
-        result = wallet2.request_spend(40.0, "vendor", "reason")
+        wallet.gateway = MockGateway(auto_approve=True)
+        result = wallet.request_spend(40.0, "vendor", "reason")
         assert "Card approved" in result
 
 
