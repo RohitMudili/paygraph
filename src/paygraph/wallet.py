@@ -365,30 +365,16 @@ class AgentWallet:
 
         amount_cents = int(round(amount * 100))
 
-        # Dispatch to the async gateway method if available, otherwise fall back to
-        # the sync variant (MockX402Gateway only implements the sync interface).
-        execute = getattr(self.x402_gateway, "execute_x402_async", None)
         try:
-            if callable(execute):
-                receipt = await execute(
-                    url,
-                    amount_cents,
-                    vendor,
-                    justification,
-                    method=method,
-                    headers=headers,
-                    body=body,
-                )
-            else:
-                receipt = self.x402_gateway.execute_x402(
-                    url,
-                    amount_cents,
-                    vendor,
-                    justification,
-                    method=method,
-                    headers=headers,
-                    body=body,
-                )
+            receipt = await self.x402_gateway.execute_x402_async(
+                url,
+                amount_cents,
+                vendor,
+                justification,
+                method=method,
+                headers=headers,
+                body=body,
+            )
         except SpendDeniedError:
             self._audit.log(
                 AuditRecord.now(
@@ -499,7 +485,7 @@ class AgentWallet:
         wallet = self
 
         @tool("x402_pay", args_schema=X402SpendRequest)
-        async def x402_pay(
+        def x402_pay(
             url: str,
             amount: float,
             vendor: str,
@@ -508,10 +494,26 @@ class AgentWallet:
         ) -> str:
             """Use this tool to pay for an x402-enabled API endpoint. Provide the URL, dollar amount, vendor name, justification, and HTTP method."""
             try:
+                return wallet.request_x402(
+                    url, amount, vendor, justification, method=method
+                )
+            except (PolicyViolationError, SpendDeniedError, GatewayError) as e:
+                return f"x402 payment denied: {e}"
+
+        async def _async_x402_pay(
+            url: str,
+            amount: float,
+            vendor: str,
+            justification: str,
+            method: str = "GET",
+        ) -> str:
+            try:
                 return await wallet.request_x402_async(
                     url, amount, vendor, justification, method=method
                 )
             except (PolicyViolationError, SpendDeniedError, GatewayError) as e:
                 return f"x402 payment denied: {e}"
+
+        x402_pay.coroutine = _async_x402_pay
 
         return x402_pay
