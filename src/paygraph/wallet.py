@@ -204,7 +204,12 @@ class AgentWallet:
         headers: dict | None = None,
         body: str | None = None,
     ) -> str:
-        """Make a policy-checked x402 payment to a paid HTTP endpoint.
+        """Make a policy-checked x402 payment to a paid HTTP endpoint (sync).
+
+        Safe to call from non-async code. **Do not call from a running event
+        loop** (LangGraph agents, FastAPI, Jupyter) — use
+        ``await wallet.request_x402_async(...)`` instead, or use
+        ``wallet.x402_tool`` which handles this automatically.
 
         Args:
             url: The x402-enabled API endpoint URL.
@@ -305,6 +310,119 @@ class AgentWallet:
 
         return receipt.response_body
 
+    async def request_x402_async(
+        self,
+        url: str,
+        amount: float,
+        vendor: str,
+        justification: str,
+        method: str = "GET",
+        headers: dict | None = None,
+        body: str | None = None,
+    ) -> str:
+        """Make a policy-checked x402 payment to a paid HTTP endpoint (async).
+
+        Use this coroutine from async contexts such as LangGraph agents,
+        FastAPI handlers, or Jupyter notebooks where an event loop is already
+        running. The ``x402_tool`` property uses this method automatically.
+
+        Args:
+            url: The x402-enabled API endpoint URL.
+            amount: Dollar amount for the request (e.g. 0.50 for $0.50).
+            vendor: Name of the service or vendor.
+            justification: Explanation of why this API call is necessary.
+            method: HTTP method (default ``"GET"``).
+            headers: Optional additional HTTP headers.
+            body: Optional request body string.
+
+        Returns:
+            The response body from the paid resource.
+
+        Raises:
+            GatewayError: If no x402 gateway is configured, or the payment fails.
+            PolicyViolationError: If the policy engine denies the request.
+            SpendDeniedError: If a human denies the request (MockX402Gateway).
+        """
+        if self.x402_gateway is None:
+            raise GatewayError(
+                "No x402 gateway configured. Pass x402_gateway to AgentWallet."
+            )
+
+        on_check = (
+            self._audit.start_request(amount, vendor) if self._audit.verbose else None
+        )
+        result = self.policy_engine.evaluate(
+            amount, vendor, justification, on_check=on_check
+        )
+
+        if not result.approved:
+            self._audit.log(
+                AuditRecord.now(
+                    agent_id=self.agent_id,
+                    amount=amount,
+                    vendor=vendor,
+                    justification=justification,
+                    policy_result="denied",
+                    denial_reason=result.denial_reason,
+                    checks_passed=result.checks_passed,
+                )
+            )
+            raise PolicyViolationError(result.denial_reason)
+
+        amount_cents = int(round(amount * 100))
+
+        try:
+            receipt = await self.x402_gateway.execute_x402_async(
+                url,
+                amount_cents,
+                vendor,
+                justification,
+                method=method,
+                headers=headers,
+                body=body,
+            )
+        except SpendDeniedError:
+            self._audit.log(
+                AuditRecord.now(
+                    agent_id=self.agent_id,
+                    amount=amount,
+                    vendor=vendor,
+                    justification=justification,
+                    policy_result="denied",
+                    denial_reason="Human denied the x402 payment request",
+                    checks_passed=result.checks_passed,
+                )
+            )
+            raise
+        except Exception as e:
+            self._audit.log(
+                AuditRecord.now(
+                    agent_id=self.agent_id,
+                    amount=amount,
+                    vendor=vendor,
+                    justification=justification,
+                    policy_result="denied",
+                    denial_reason=f"Gateway error: {e}",
+                    checks_passed=result.checks_passed,
+                )
+            )
+            raise GatewayError(str(e)) from e
+
+        self._audit.log(
+            AuditRecord.now(
+                agent_id=self.agent_id,
+                amount=amount,
+                vendor=vendor,
+                justification=justification,
+                policy_result="approved",
+                checks_passed=result.checks_passed,
+                gateway_ref=receipt.gateway_ref,
+                gateway_type=receipt.gateway_type,
+            )
+        )
+
+        return receipt.response_body
+
     @cached_property
     def crewai_tool(self):
         """CrewAI-compatible tool for virtual card spends.
@@ -387,5 +505,21 @@ class AgentWallet:
                 )
             except (PolicyViolationError, SpendDeniedError, GatewayError) as e:
                 return f"x402 payment denied: {e}"
+
+        async def _async_x402_pay(
+            url: str,
+            amount: float,
+            vendor: str,
+            justification: str,
+            method: str = "GET",
+        ) -> str:
+            try:
+                return await wallet.request_x402_async(
+                    url, amount, vendor, justification, method=method
+                )
+            except (PolicyViolationError, SpendDeniedError, GatewayError) as e:
+                return f"x402 payment denied: {e}"
+
+        x402_pay.coroutine = _async_x402_pay
 
         return x402_pay
