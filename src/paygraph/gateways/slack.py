@@ -2,7 +2,7 @@ import secrets
 
 import httpx
 
-from paygraph.exceptions import HumanApprovalRequired, SpendDeniedError
+from paygraph.exceptions import GatewayError, HumanApprovalRequired, SpendDeniedError
 from paygraph.gateways.base import BaseGateway, VirtualCard
 
 
@@ -48,13 +48,20 @@ class SlackApprovalGateway(BaseGateway):
         self.inner_gateway = inner_gateway
         self._pending: dict[str, dict] = {}
 
-    def request_approval(self, amount_cents: int, vendor: str, memo: str) -> None:
+    def request_approval(
+        self, amount_cents: int, vendor: str, memo: str, justification: str | None = None
+    ) -> None:
         """Post an approval request to Slack and raise ``HumanApprovalRequired``.
+
+        Posts a plain-text notification to the configured incoming webhook URL.
+        Note: incoming webhooks do not support interactive callbacks — wire up
+        a full Slack app with interactivity enabled if you need button responses.
 
         Args:
             amount_cents: Spend amount in cents.
             vendor: Vendor name.
             memo: Justification for the spend.
+            justification: Original justification string (stored for audit log).
 
         Raises:
             HumanApprovalRequired: Always — after successfully posting to Slack.
@@ -69,37 +76,21 @@ class SlackApprovalGateway(BaseGateway):
                 f"Amount: *${amount_dollars:.2f}*\n"
                 f"Vendor: *{vendor}*\n"
                 f"Justification: {memo}\n"
-                f"Request ID: `{request_id}`"
+                f"Request ID: `{request_id}`\n"
+                f"Reply with `approve {request_id}` or `deny {request_id}`."
             ),
-            "attachments": [
-                {
-                    "fallback": "Approve or Deny this spend request",
-                    "callback_id": request_id,
-                    "actions": [
-                        {
-                            "name": "approve",
-                            "text": "Approve",
-                            "type": "button",
-                            "value": "approve",
-                            "style": "primary",
-                        },
-                        {
-                            "name": "deny",
-                            "text": "Deny",
-                            "type": "button",
-                            "value": "deny",
-                            "style": "danger",
-                        },
-                    ],
-                }
-            ],
         }
 
-        httpx.post(self.webhook_url, json=payload, timeout=10)
+        try:
+            httpx.post(self.webhook_url, json=payload, timeout=10)
+        except Exception as e:
+            raise GatewayError(f"Slack webhook POST failed: {e}") from e
+
         self._pending[request_id] = {
             "amount_cents": amount_cents,
             "vendor": vendor,
             "memo": memo,
+            "justification": justification,
         }
         raise HumanApprovalRequired(request_id, amount_dollars, vendor)
 
@@ -140,6 +131,17 @@ class SlackApprovalGateway(BaseGateway):
         return self.inner_gateway.execute_spend(
             pending["amount_cents"], pending["vendor"], pending["memo"]
         )
+
+    def get_pending(self, request_id: str) -> dict:
+        """Return a pending request's metadata without removing it.
+
+        Used by ``AgentWallet.complete_spend()`` to retrieve vendor/justification
+        for audit logging before calling ``complete_spend()``.
+
+        Raises:
+            KeyError: If ``request_id`` is unknown.
+        """
+        return self._pending[request_id]
 
     def revoke(self, gateway_ref: str) -> bool:
         """Revoke a card via the inner gateway.

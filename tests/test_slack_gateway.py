@@ -2,6 +2,7 @@ import json
 import tempfile
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from paygraph.exceptions import GatewayError, HumanApprovalRequired, SpendDeniedError
@@ -82,6 +83,19 @@ class TestSlackApprovalGateway:
         payload = call_kwargs[1]["json"]
         assert "Anthropic" in payload["text"]
         assert "$50.00" in payload["text"]
+        # No interactive attachments — incoming webhooks can't receive callbacks
+        assert "attachments" not in payload
+
+    def test_request_approval_wraps_webhook_error_as_gateway_error(self):
+        """If Slack webhook POST fails, raises GatewayError not raw httpx exception."""
+        from paygraph.exceptions import GatewayError
+        gateway = SlackApprovalGateway(
+            webhook_url="https://hooks.slack.com/test",
+            inner_gateway=MockGateway(auto_approve=True),
+        )
+        with patch("httpx.post", side_effect=httpx.ConnectError("connection refused")):
+            with pytest.raises(GatewayError, match="Slack webhook POST failed"):
+                gateway.request_approval(5000, "Anthropic", "need tokens")
 
     def test_complete_spend_approved_returns_card(self):
         """approved=True delegates to inner gateway and returns a VirtualCard."""
@@ -211,3 +225,41 @@ class TestWalletSlackFlow:
         # No threshold — should execute directly via inner gateway
         result = wallet.request_spend(50.0, "Anthropic", "need tokens")
         assert "Card approved" in result
+
+    def test_complete_spend_commits_budget(self):
+        """complete_spend(approved=True) must commit the spend to the daily budget."""
+        from paygraph.exceptions import PolicyViolationError
+        policy = SpendPolicy(
+            max_transaction=100.0,
+            daily_budget=60.0,
+            require_human_approval_above=20.0,
+        )
+        wallet, _ = _make_slack_wallet(policy=policy)
+
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired) as exc_info:
+                wallet.request_spend(50.0, "Anthropic", "need tokens")
+
+        wallet.complete_spend(exc_info.value.request_id, approved=True)
+
+        # Budget is now 50.0 / 60.0 — a second 50.0 exceeds the daily budget
+        # and should be rejected by policy before even reaching Slack
+        assert wallet.policy_engine._daily_spend == 50.0
+        with pytest.raises(PolicyViolationError, match="Daily budget exhausted"):
+            wallet.request_spend(50.0, "Anthropic", "need tokens again")
+
+    def test_complete_spend_audit_has_correct_vendor_and_justification(self):
+        """Audit record from complete_spend uses real vendor/justification, not placeholders."""
+        wallet, path = _make_slack_wallet()
+
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired) as exc_info:
+                wallet.request_spend(50.0, "Anthropic", "need tokens for task")
+
+        wallet.complete_spend(exc_info.value.request_id, approved=True)
+
+        records = _read_audit(path)
+        approved_record = next(r for r in records if r["policy_result"] == "approved")
+        assert approved_record["vendor"] == "Anthropic"
+        assert approved_record["justification"] == "need tokens for task"
+        assert approved_record["amount"] == 50.0

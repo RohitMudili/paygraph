@@ -118,7 +118,7 @@ class AgentWallet:
                     checks_passed=result.checks_passed,
                 )
             )
-            self.gateway.request_approval(amount_cents, vendor, justification)
+            self.gateway.request_approval(amount_cents, vendor, justification, justification=justification)
             # request_approval always raises HumanApprovalRequired — unreachable
 
         # Mint card — commit the budget only after the gateway succeeds
@@ -196,13 +196,20 @@ class AgentWallet:
         if not isinstance(self.gateway, SlackApprovalGateway):
             raise GatewayError("complete_spend requires a SlackApprovalGateway.")
 
+        # Peek at pending metadata before complete_spend() pops it
+        pending = self.gateway.get_pending(request_id)
+        amount = pending["amount_cents"] / 100
+        vendor = pending["vendor"]
+        justification = pending["justification"]
+
         card = self.gateway.complete_spend(request_id, approved)
+        self.policy_engine.commit_spend(amount)
         self._audit.log(
             AuditRecord.now(
                 agent_id=self.agent_id,
-                amount=card.spend_limit_cents / 100,
-                vendor="(resumed)",
-                justification=None,
+                amount=amount,
+                vendor=vendor,
+                justification=justification,
                 policy_result="approved",
                 gateway_ref=card.gateway_ref,
                 gateway_type=card.gateway_type,
@@ -212,7 +219,7 @@ class AgentWallet:
         if card.gateway_type.startswith("stripe_mpp"):
             return (
                 f"SPT approved. Token: {card.gateway_ref} "
-                f"(spend limit: ${card.spend_limit_cents / 100:.2f})"
+                f"(spend limit: ${amount:.2f})"
             )
 
         return (
