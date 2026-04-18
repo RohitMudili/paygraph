@@ -6,16 +6,16 @@ import httpx
 import pytest
 
 from paygraph.exceptions import GatewayError, HumanApprovalRequired, SpendDeniedError
-from paygraph.gateways.base import BaseGateway, VirtualCard
+from paygraph.gateways.base import VirtualCard
 from paygraph.gateways.mock import MockGateway
 from paygraph.gateways.slack import SlackApprovalGateway
 from paygraph.policy import SpendPolicy
 from paygraph.wallet import AgentWallet
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_slack_wallet(
     webhook_url: str = "https://hooks.slack.com/test",
@@ -48,6 +48,7 @@ def _read_audit(path: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # SlackApprovalGateway unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestSlackApprovalGateway:
     def test_request_approval_raises_human_approval_required(self):
@@ -89,6 +90,7 @@ class TestSlackApprovalGateway:
     def test_request_approval_wraps_webhook_error_as_gateway_error(self):
         """If Slack webhook POST fails, raises GatewayError not raw httpx exception."""
         from paygraph.exceptions import GatewayError
+
         gateway = SlackApprovalGateway(
             webhook_url="https://hooks.slack.com/test",
             inner_gateway=MockGateway(auto_approve=True),
@@ -154,6 +156,7 @@ class TestSlackApprovalGateway:
 # ---------------------------------------------------------------------------
 # AgentWallet integration tests
 # ---------------------------------------------------------------------------
+
 
 class TestWalletSlackFlow:
     def test_above_threshold_raises_human_approval_required(self):
@@ -229,6 +232,7 @@ class TestWalletSlackFlow:
     def test_complete_spend_commits_budget(self):
         """complete_spend(approved=True) must commit the spend to the daily budget."""
         from paygraph.exceptions import PolicyViolationError
+
         policy = SpendPolicy(
             max_transaction=100.0,
             daily_budget=60.0,

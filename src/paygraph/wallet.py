@@ -1,7 +1,11 @@
 from functools import cached_property
 
 from paygraph.audit import AuditLogger, AuditRecord
-from paygraph.exceptions import GatewayError, HumanApprovalRequired, PolicyViolationError, SpendDeniedError
+from paygraph.exceptions import (
+    GatewayError,
+    PolicyViolationError,
+    SpendDeniedError,
+)
 from paygraph.gateways.mock import MockGateway
 from paygraph.gateways.slack import SlackApprovalGateway
 from paygraph.policy import PolicyEngine, SpendPolicy
@@ -118,7 +122,9 @@ class AgentWallet:
                     checks_passed=result.checks_passed,
                 )
             )
-            self.gateway.request_approval(amount_cents, vendor, justification, justification=justification)
+            self.gateway.request_approval(
+                amount_cents, vendor, justification, justification=justification
+            )
             # request_approval always raises HumanApprovalRequired — unreachable
 
         # Mint card — commit the budget only after the gateway succeeds
@@ -218,14 +224,10 @@ class AgentWallet:
 
         if card.gateway_type.startswith("stripe_mpp"):
             return (
-                f"SPT approved. Token: {card.gateway_ref} "
-                f"(spend limit: ${amount:.2f})"
+                f"SPT approved. Token: {card.gateway_ref} (spend limit: ${amount:.2f})"
             )
 
-        return (
-            f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, "
-            f"Expiry: {card.expiry}"
-        )
+        return f"Card approved. PAN: {card.pan}, CVV: {card.cvv}, Expiry: {card.expiry}"
 
     @cached_property
     def spend_tool(self):

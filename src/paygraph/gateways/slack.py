@@ -49,7 +49,11 @@ class SlackApprovalGateway(BaseGateway):
         self._pending: dict[str, dict] = {}
 
     def request_approval(
-        self, amount_cents: int, vendor: str, memo: str, justification: str | None = None
+        self,
+        amount_cents: int,
+        vendor: str,
+        memo: str,
+        justification: str | None = None,
     ) -> None:
         """Post an approval request to Slack and raise ``HumanApprovalRequired``.
 
