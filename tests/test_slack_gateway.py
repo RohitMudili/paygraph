@@ -208,6 +208,23 @@ class TestWalletSlackFlow:
         with pytest.raises(SpendDeniedError):
             wallet.complete_spend(exc_info.value.request_id, approved=False)
 
+    def test_complete_spend_denial_writes_audit_record(self):
+        """complete_spend(approved=False) writes a denial audit record with real metadata."""
+        wallet, path = _make_slack_wallet()
+        with patch("httpx.post"):
+            with pytest.raises(HumanApprovalRequired) as exc_info:
+                wallet.request_spend(50.0, "Anthropic", "need tokens for task")
+
+        with pytest.raises(SpendDeniedError):
+            wallet.complete_spend(exc_info.value.request_id, approved=False)
+
+        records = _read_audit(path)
+        denied = next(r for r in records if r["policy_result"] == "denied")
+        assert denied["vendor"] == "Anthropic"
+        assert denied["justification"] == "need tokens for task"
+        assert denied["amount"] == 50.0
+        assert "Human denied" in denied["denial_reason"]
+
     def test_complete_spend_without_slack_gateway_raises_gateway_error(self):
         """complete_spend raises GatewayError if gateway is not SlackApprovalGateway."""
         f = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)

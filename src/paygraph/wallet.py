@@ -208,7 +208,21 @@ class AgentWallet:
         vendor = pending["vendor"]
         justification = pending["justification"]
 
-        card = self.gateway.complete_spend(request_id, approved)
+        try:
+            card = self.gateway.complete_spend(request_id, approved)
+        except SpendDeniedError:
+            self._audit.log(
+                AuditRecord.now(
+                    agent_id=self.agent_id,
+                    amount=amount,
+                    vendor=vendor,
+                    justification=justification,
+                    policy_result="denied",
+                    denial_reason=f"Human denied spend of ${amount:.2f} for {vendor}",
+                )
+            )
+            raise
+
         self.policy_engine.commit_spend(amount)
         self._audit.log(
             AuditRecord.now(
@@ -459,7 +473,6 @@ class AgentWallet:
                 headers=headers,
                 body=body,
             )
-            self.policy_engine.commit_spend(amount)
         except SpendDeniedError:
             self._audit.log(
                 AuditRecord.now(
@@ -486,6 +499,8 @@ class AgentWallet:
                 )
             )
             raise GatewayError(str(e)) from e
+
+        self.policy_engine.commit_spend(amount)
 
         self._audit.log(
             AuditRecord.now(
