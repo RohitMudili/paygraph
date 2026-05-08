@@ -11,7 +11,7 @@ import pytest
 # skipped when the optional `mcp` extra is not installed.
 mcp_types = pytest.importorskip("mcp.types")
 
-from paygraph.exceptions import HumanApprovalRequired  # noqa: E402
+from paygraph.exceptions import HumanApprovalRequired, SpendDeniedError  # noqa: E402
 from paygraph.gateways.mock import MockGateway  # noqa: E402
 from paygraph.gateways.mock_x402 import MockX402Gateway  # noqa: E402
 from paygraph.gateways.stripe import StripeCardGateway  # noqa: E402
@@ -146,6 +146,34 @@ class TestSpendToolViaServer:
         assert result.root.structuredContent["error"] == "human_approval_required"
         assert result.root.structuredContent["data"]["request_id"] == "req_123"
 
+    def test_spend_denied_error_code(self):
+
+        wallet = _make_wallet()
+        wallet.request_spend = MagicMock(
+            side_effect=SpendDeniedError("Human denied spend")
+        )
+        server = build_server(wallet)
+        handler = server.request_handlers[mcp_types.CallToolRequest]
+
+        result = asyncio.run(
+            handler(
+                mcp_types.CallToolRequest(
+                    method="tools/call",
+                    params=mcp_types.CallToolRequestParams(
+                        name="paygraph_request_spend",
+                        arguments={
+                            "amount": 42.0,
+                            "vendor": "Vendor",
+                            "justification": "Need approval",
+                        },
+                    ),
+                )
+            )
+        )
+
+        assert result.root.isError is True
+        assert result.root.structuredContent["error"] == "spend_denied"
+
 
 class TestX402ToolViaServer:
     def test_success_returns_wallet_reply(self):
@@ -174,7 +202,7 @@ class TestX402ToolViaServer:
         assert result.root.isError is False
         assert result.root.content[0].text == '{"ok": true}'
 
-    def test_validation_error_returns_tool_error(self):
+    def test_validation_error_handling(self):
 
         server = build_server(_make_wallet())
         handler = server.request_handlers[mcp_types.CallToolRequest]
@@ -197,6 +225,7 @@ class TestX402ToolViaServer:
 
         assert result.root.isError is True
         assert "Input validation error" in result.root.content[0].text
+        assert result.root.structuredContent["error"] == "validation_error"
 
 
 class TestEnvBootstrap:

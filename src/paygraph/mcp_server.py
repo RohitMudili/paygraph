@@ -7,7 +7,7 @@ import os
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from paygraph.exceptions import (
     GatewayError,
@@ -197,7 +197,17 @@ def build_server(wallet: AgentWallet):
                 vendor=exc.vendor,
                 gateway_name=exc.gateway_name,
             )
-        except (GatewayError, SpendDeniedError, ValueError) as exc:
+        except ValidationError as exc:
+            return _error_result(
+                types,
+                "validation_error",
+                f"Input validation error: {exc}",
+            )
+        except SpendDeniedError as exc:
+            return _error_result(types, "spend_denied", str(exc))
+        except GatewayError as exc:
+            return _error_result(types, "gateway_error", str(exc))
+        except ValueError as exc:
             return _error_result(types, "gateway_error", str(exc))
 
     return server

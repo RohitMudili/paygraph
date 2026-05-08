@@ -345,6 +345,9 @@ def main() -> None:
             "(requires STRIPE_API_KEY, STRIPE_MPP_PAYMENT_METHOD, STRIPE_MPP_GRANTEE)"
         ),
     )
+    mcp_parser = subparsers.add_parser("mcp", help="MCP server commands")
+    mcp_sub = mcp_parser.add_subparsers(dest="mcp_command")
+    mcp_sub.add_parser("serve", help="Run the PayGraph MCP server over stdio")
 
     args = parser.parse_args()
 
@@ -356,6 +359,19 @@ def main() -> None:
             run_live_demo(args.model, stripe=args.stripe, stripe_mpp=args.stripe_mpp)
         else:
             run_demo()
+    elif args.command == "mcp":
+        if args.mcp_command == "serve":
+            from paygraph.mcp_server import _MCP_IMPORT_ERROR
+            from paygraph.mcp_server import main as mcp_main
+
+            try:
+                mcp_main()
+            except ImportError as exc:
+                if str(exc) == _MCP_IMPORT_ERROR:
+                    parser.exit(1, f"ERROR: {exc}\n")
+                raise
+        else:
+            mcp_parser.print_help()
     else:
         parser.print_help()
 
