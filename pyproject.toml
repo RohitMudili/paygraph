@@ -11,9 +11,10 @@ dependencies = ["pydantic", "httpx"]
 langgraph = ["langchain-core>=0.2"]
 crewai = ["crewai>=0.80", "langchain-core>=0.2"]
 live = ["langgraph>=0.2", "langchain-anthropic>=0.2", "langchain-openai>=0.2"]
+slack = ["fastapi>=0.110", "python-multipart>=0.0.9"]
 x402 = ["x402[httpx,evm,svm]"]
 docs = ["mkdocs-material", "mkdocstrings[python]"]
-dev = ["ruff>=0.4", "pytest>=8.0"]
+dev = ["ruff>=0.4", "pytest>=8.0", "fastapi>=0.110", "python-multipart>=0.0.9"]
 
 [project.scripts]
 paygraph = "paygraph.cli:main"
