@@ -1,9 +1,13 @@
 from paygraph.exceptions import (
+    CardDeclinedError,
     GatewayError,
     HumanApprovalRequired,
+    InsufficientFundsError,
     PayGraphError,
     PolicyViolationError,
+    RateLimitedError,
     SpendDeniedError,
+    StripeUnreachableError,
     UnknownApprovalError,
 )
 from paygraph.gateways.base import (
@@ -41,6 +45,10 @@ __all__ = [
     "SpendDeniedError",
     "PolicyViolationError",
     "GatewayError",
+    "CardDeclinedError",
+    "InsufficientFundsError",
+    "RateLimitedError",
+    "StripeUnreachableError",
     "HumanApprovalRequired",
     "UnknownApprovalError",
 ]
