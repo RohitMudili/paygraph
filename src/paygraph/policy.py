@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta
 
 
 @dataclass
@@ -17,6 +17,12 @@ class SpendPolicy:
         allowed_mccs: Merchant Category Code allowlist (reserved for future use).
         require_justification: Whether a justification string is required
             for every spend request.
+        hourly_budget: Maximum total dollar amount allowed per hour.
+            If None, no hourly limit is enforced.
+        weekly_budget: Maximum total dollar amount allowed per week.
+            If None, no weekly limit is enforced.
+        monthly_budget: Maximum total dollar amount allowed per month.
+            If None, no monthly limit is enforced.
         require_human_approval_above: If set, spends above this dollar amount
             require human approval via Slack before the gateway is called.
     """
@@ -27,6 +33,9 @@ class SpendPolicy:
     blocked_vendors: list[str] | None = None
     allowed_mccs: list[int] | None = None
     require_justification: bool = True
+    hourly_budget: float | None = None
+    weekly_budget: float | None = None
+    monthly_budget: float | None = None
     require_human_approval_above: float | None = None
 
 
@@ -49,8 +58,9 @@ class PolicyResult:
 class PolicyEngine:
     """Stateful engine that evaluates spend requests against policy rules.
 
-    Tracks cumulative daily spend in memory. The daily counter resets
-    automatically at the start of each new calendar day.
+    Tracks cumulative spend in memory per period. Counters reset automatically
+    at period boundaries (hourly on hour change, daily on date change,
+    weekly on Monday-start week boundary, monthly on month boundary).
     """
 
     def __init__(self, policy: SpendPolicy) -> None:
@@ -63,11 +73,40 @@ class PolicyEngine:
         self._daily_spend: float = 0.0
         self._current_date: date = date.today()
 
+        self._hourly_spend: float = 0.0
+        self._hourly_start: datetime | None = None
+
+        self._weekly_spend: float = 0.0
+        self._weekly_start: datetime | None = None
+
+        self._monthly_spend: float = 0.0
+        self._monthly_start: datetime | None = None
+
     def _reset_daily_if_needed(self) -> None:
         today = date.today()
         if today != self._current_date:
             self._daily_spend = 0.0
             self._current_date = today
+
+    def _reset_hourly_if_needed(self, now: datetime) -> None:
+        hour_start = now.replace(minute=0, second=0, microsecond=0)
+        if self._hourly_start != hour_start:
+            self._hourly_spend = 0.0
+            self._hourly_start = hour_start
+
+    def _reset_weekly_if_needed(self, now: datetime) -> None:
+        monday = (now - timedelta(days=now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        if self._weekly_start != monday:
+            self._weekly_spend = 0.0
+            self._weekly_start = monday
+
+    def _reset_monthly_if_needed(self, now: datetime) -> None:
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if self._monthly_start != month_start:
+            self._monthly_spend = 0.0
+            self._monthly_start = month_start
 
     def evaluate(
         self,
@@ -75,11 +114,15 @@ class PolicyEngine:
         vendor: str,
         justification: str | None = None,
         on_check: Callable[[str, bool], None] | None = None,
+        *,
+        now: datetime | None = None,
     ) -> PolicyResult:
         """Evaluate a spend request against all policy rules.
 
-        Checks are run in order: amount_cap, vendor_allowlist,
-        vendor_blocklist, mcc_filter, daily_budget, justification.
+        Checks are run in order: positive_amount, amount_cap, vendor_allowlist,
+        vendor_blocklist, mcc_filter, hourly_budget (if configured),
+        weekly_budget (if configured), monthly_budget (if configured),
+        daily_budget, justification.
         Evaluation stops at the first failure.
 
         Args:
@@ -89,11 +132,17 @@ class PolicyEngine:
                 ``policy.require_justification`` is True).
             on_check: Optional callback invoked after each check with
                 ``(check_name, passed)``.
+            now: Override current time (for deterministic testing).
 
         Returns:
             A ``PolicyResult`` indicating approval or denial.
         """
+        if now is None:
+            now = datetime.now()
         self._reset_daily_if_needed()
+        self._reset_hourly_if_needed(now)
+        self._reset_weekly_if_needed(now)
+        self._reset_monthly_if_needed(now)
         checks_passed: list[str] = []
 
         def _pass(name: str) -> None:
@@ -143,7 +192,32 @@ class PolicyEngine:
         # 3. MCC filter (stubbed — no MCC in spend request yet)
         _pass("mcc_filter")
 
-        # 4. Daily budget
+        # 4. Time-based budget checks — only enforced and reported when configured
+        if self.policy.hourly_budget is not None:
+            if self._hourly_spend + amount > self.policy.hourly_budget:
+                return _fail(
+                    "hourly_budget",
+                    f"Hourly budget exhausted (${self._hourly_spend:.2f} / ${self.policy.hourly_budget:.2f})",
+                )
+            _pass("hourly_budget")
+
+        if self.policy.weekly_budget is not None:
+            if self._weekly_spend + amount > self.policy.weekly_budget:
+                return _fail(
+                    "weekly_budget",
+                    f"Weekly budget exhausted (${self._weekly_spend:.2f} / ${self.policy.weekly_budget:.2f})",
+                )
+            _pass("weekly_budget")
+
+        if self.policy.monthly_budget is not None:
+            if self._monthly_spend + amount > self.policy.monthly_budget:
+                return _fail(
+                    "monthly_budget",
+                    f"Monthly budget exhausted (${self._monthly_spend:.2f} / ${self.policy.monthly_budget:.2f})",
+                )
+            _pass("monthly_budget")
+
+        # 5. Daily budget (existing logic)
         if self._daily_spend + amount > self.policy.daily_budget:
             return _fail(
                 "daily_budget",
@@ -151,7 +225,7 @@ class PolicyEngine:
             )
         _pass("daily_budget")
 
-        # 5. Justification present
+        # 6. Justification present
         if self.policy.require_justification and not justification:
             return _fail(
                 "justification", "Justification is required but was not provided"
@@ -160,14 +234,26 @@ class PolicyEngine:
 
         return PolicyResult(approved=True, checks_passed=checks_passed)
 
-    def commit_spend(self, amount: float) -> None:
-        """Permanently record a spend against the daily budget.
+    def commit_spend(self, amount: float, *, now: datetime | None = None) -> None:
+        """Permanently record a spend against all budget counters.
 
         Must be called only after a successful gateway transaction so that a
-        gateway failure does not silently consume the agent's daily budget.
+        gateway failure does not silently consume the agent's budget.
 
         Args:
             amount: Dollar amount that was successfully spent.
+            now: Override current time (for deterministic testing).
         """
+        if now is None:
+            now = datetime.now()
         self._reset_daily_if_needed()
         self._daily_spend += amount
+        if self.policy.hourly_budget is not None:
+            self._reset_hourly_if_needed(now)
+            self._hourly_spend += amount
+        if self.policy.weekly_budget is not None:
+            self._reset_weekly_if_needed(now)
+            self._weekly_spend += amount
+        if self.policy.monthly_budget is not None:
+            self._reset_monthly_if_needed(now)
+            self._monthly_spend += amount
