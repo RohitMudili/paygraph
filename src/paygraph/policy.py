@@ -1,10 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
-
-from .time_periods import PeriodTracker, TimePeriod
-
-_VALID_ROLLOVER_PERIODS: frozenset[str] = frozenset({"hourly", "weekly", "monthly"})
+from datetime import date, datetime, timedelta
 
 
 @dataclass
@@ -27,10 +23,6 @@ class SpendPolicy:
             If None, no weekly limit is enforced.
         monthly_budget: Maximum total dollar amount allowed per month.
             If None, no monthly limit is enforced.
-        enable_rollover: Whether unused budget from expired periods should
-            roll over to the next period of the same type.
-        rollover_periods: List of period types that support rollover.
-            Valid values: "hourly", "weekly", "monthly".
         require_human_approval_above: If set, spends above this dollar amount
             require human approval via Slack before the gateway is called.
     """
@@ -41,24 +33,10 @@ class SpendPolicy:
     blocked_vendors: list[str] | None = None
     allowed_mccs: list[int] | None = None
     require_justification: bool = True
-
-    # Time-based budget fields
     hourly_budget: float | None = None
     weekly_budget: float | None = None
     monthly_budget: float | None = None
-
-    # Rollover configuration
-    enable_rollover: bool = False
-    rollover_periods: list[str] = field(default_factory=lambda: ["weekly", "monthly"])
     require_human_approval_above: float | None = None
-
-    def __post_init__(self) -> None:
-        invalid = set(self.rollover_periods) - _VALID_ROLLOVER_PERIODS
-        if invalid:
-            raise ValueError(
-                f"Invalid rollover_periods: {sorted(invalid)}. "
-                f"Valid values are: {sorted(_VALID_ROLLOVER_PERIODS)}"
-            )
 
 
 @dataclass
@@ -80,11 +58,9 @@ class PolicyResult:
 class PolicyEngine:
     """Stateful engine that evaluates spend requests against policy rules.
 
-    Tracks cumulative daily spend in memory. The daily counter resets
-    automatically at the start of each new calendar day.
-
-    Also supports time-based spending limits (hourly, weekly, monthly)
-    with rollover functionality when configured in the policy.
+    Tracks cumulative spend in memory per period. Counters reset automatically
+    at period boundaries (hourly on hour change, daily on date change,
+    weekly on Monday-start week boundary, monthly on month boundary).
     """
 
     def __init__(self, policy: SpendPolicy) -> None:
@@ -97,12 +73,14 @@ class PolicyEngine:
         self._daily_spend: float = 0.0
         self._current_date: date = date.today()
 
-        # Time-based policy tracking
-        self._period_tracker = PeriodTracker()
+        self._hourly_spend: float = 0.0
+        self._hourly_start: datetime | None = None
 
-        # Cache for current periods to avoid repeated calculations
-        self._current_periods: dict[str, TimePeriod] = {}
-        self._eval_count: int = 0
+        self._weekly_spend: float = 0.0
+        self._weekly_start: datetime | None = None
+
+        self._monthly_spend: float = 0.0
+        self._monthly_start: datetime | None = None
 
     def _reset_daily_if_needed(self) -> None:
         today = date.today()
@@ -110,75 +88,25 @@ class PolicyEngine:
             self._daily_spend = 0.0
             self._current_date = today
 
-    def _update_time_based_periods(self, current_time: datetime | None = None) -> None:
-        """Update current periods and process any rollovers.
+    def _reset_hourly_if_needed(self, now: datetime) -> None:
+        hour_start = now.replace(minute=0, second=0, microsecond=0)
+        if self._hourly_start != hour_start:
+            self._hourly_spend = 0.0
+            self._hourly_start = hour_start
 
-        Args:
-            current_time: Current time (defaults to datetime.now())
-        """
-        if current_time is None:
-            current_time = datetime.now()
+    def _reset_weekly_if_needed(self, now: datetime) -> None:
+        monday = (now - timedelta(days=now.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        if self._weekly_start != monday:
+            self._weekly_spend = 0.0
+            self._weekly_start = monday
 
-        period_configs = []
-        if self.policy.hourly_budget is not None:
-            period_configs.append(("hourly", self.policy.hourly_budget))
-        if self.policy.weekly_budget is not None:
-            period_configs.append(("weekly", self.policy.weekly_budget))
-        if self.policy.monthly_budget is not None:
-            period_configs.append(("monthly", self.policy.monthly_budget))
-
-        for period_type, budget_limit in period_configs:
-            period = self._period_tracker.get_current_period(
-                period_type, budget_limit, current_time
-            )
-
-            # Only update cache if period changed
-            if self._current_periods.get(period_type) is not period:
-                if (self.policy.enable_rollover and
-                    period_type in self.policy.rollover_periods and
-                    period.rollover_amount == 0.0):
-
-                    rollover_amount = self._period_tracker.process_period_rollover(
-                        period_type, budget_limit, current_time
-                    )
-                    if rollover_amount is not None:
-                        self._period_tracker.apply_rollover(period, rollover_amount)
-
-                self._current_periods[period_type] = period
-
-        self._eval_count += 1
-        if self._eval_count % 100 == 0:
-            self._period_tracker.cleanup_old_periods(current_time)
-
-    def _check_time_based_budget(self, amount: float, period_type: str) -> str | None:
-        """Check if amount would exceed time-based budget.
-
-        Args:
-            amount: Amount to check
-            period_type: Type of period to check
-
-        Returns:
-            None if check passes, error message if it fails
-        """
-        period = self._current_periods.get(period_type)
-        if period is None:
-            return None  # No budget configured for this period
-
-        # Check if the amount would exceed the effective budget
-        if period.spent_amount + amount > period.effective_budget:
-            return (f"{period_type.title()} budget exhausted "
-                   f"(${period.spent_amount:.2f} / ${period.effective_budget:.2f})")
-
-        return None
-
-    def _record_time_based_spending(self, amount: float) -> None:
-        """Record spending in all active time periods.
-
-        Args:
-            amount: Amount to record
-        """
-        for period in self._current_periods.values():
-            self._period_tracker.record_spending(period, amount)
+    def _reset_monthly_if_needed(self, now: datetime) -> None:
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if self._monthly_start != month_start:
+            self._monthly_spend = 0.0
+            self._monthly_start = month_start
 
     def evaluate(
         self,
@@ -186,12 +114,15 @@ class PolicyEngine:
         vendor: str,
         justification: str | None = None,
         on_check: Callable[[str, bool], None] | None = None,
+        *,
+        now: datetime | None = None,
     ) -> PolicyResult:
         """Evaluate a spend request against all policy rules.
 
         Checks are run in order: positive_amount, amount_cap, vendor_allowlist,
-        vendor_blocklist, mcc_filter, hourly_budget, weekly_budget,
-        monthly_budget, daily_budget, justification.
+        vendor_blocklist, mcc_filter, hourly_budget (if configured),
+        weekly_budget (if configured), monthly_budget (if configured),
+        daily_budget, justification.
         Evaluation stops at the first failure.
 
         Args:
@@ -201,12 +132,17 @@ class PolicyEngine:
                 ``policy.require_justification`` is True).
             on_check: Optional callback invoked after each check with
                 ``(check_name, passed)``.
+            now: Override current time (for deterministic testing).
 
         Returns:
             A ``PolicyResult`` indicating approval or denial.
         """
+        if now is None:
+            now = datetime.now()
         self._reset_daily_if_needed()
-        self._update_time_based_periods()
+        self._reset_hourly_if_needed(now)
+        self._reset_weekly_if_needed(now)
+        self._reset_monthly_if_needed(now)
         checks_passed: list[str] = []
 
         def _pass(name: str) -> None:
@@ -256,12 +192,30 @@ class PolicyEngine:
         # 3. MCC filter (stubbed — no MCC in spend request yet)
         _pass("mcc_filter")
 
-        # 4. Time-based budget checks (hourly, weekly, monthly)
-        for period_type in ["hourly", "weekly", "monthly"]:
-            error = self._check_time_based_budget(amount, period_type)
-            if error:
-                return _fail(f"{period_type}_budget", error)
-            _pass(f"{period_type}_budget")
+        # 4. Time-based budget checks — only enforced and reported when configured
+        if self.policy.hourly_budget is not None:
+            if self._hourly_spend + amount > self.policy.hourly_budget:
+                return _fail(
+                    "hourly_budget",
+                    f"Hourly budget exhausted (${self._hourly_spend:.2f} / ${self.policy.hourly_budget:.2f})",
+                )
+            _pass("hourly_budget")
+
+        if self.policy.weekly_budget is not None:
+            if self._weekly_spend + amount > self.policy.weekly_budget:
+                return _fail(
+                    "weekly_budget",
+                    f"Weekly budget exhausted (${self._weekly_spend:.2f} / ${self.policy.weekly_budget:.2f})",
+                )
+            _pass("weekly_budget")
+
+        if self.policy.monthly_budget is not None:
+            if self._monthly_spend + amount > self.policy.monthly_budget:
+                return _fail(
+                    "monthly_budget",
+                    f"Monthly budget exhausted (${self._monthly_spend:.2f} / ${self.policy.monthly_budget:.2f})",
+                )
+            _pass("monthly_budget")
 
         # 5. Daily budget (existing logic)
         if self._daily_spend + amount > self.policy.daily_budget:
@@ -280,7 +234,7 @@ class PolicyEngine:
 
         return PolicyResult(approved=True, checks_passed=checks_passed)
 
-    def commit_spend(self, amount: float) -> None:
+    def commit_spend(self, amount: float, *, now: datetime | None = None) -> None:
         """Permanently record a spend against all budget counters.
 
         Must be called only after a successful gateway transaction so that a
@@ -288,8 +242,18 @@ class PolicyEngine:
 
         Args:
             amount: Dollar amount that was successfully spent.
+            now: Override current time (for deterministic testing).
         """
+        if now is None:
+            now = datetime.now()
         self._reset_daily_if_needed()
         self._daily_spend += amount
-        self._update_time_based_periods()
-        self._record_time_based_spending(amount)
+        if self.policy.hourly_budget is not None:
+            self._reset_hourly_if_needed(now)
+            self._hourly_spend += amount
+        if self.policy.weekly_budget is not None:
+            self._reset_weekly_if_needed(now)
+            self._weekly_spend += amount
+        if self.policy.monthly_budget is not None:
+            self._reset_monthly_if_needed(now)
+            self._monthly_spend += amount
