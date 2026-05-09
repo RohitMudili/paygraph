@@ -16,10 +16,10 @@ from paygraph import (
     AgentWallet,
     HumanApprovalRequired,
     SlackApprovalGateway,
-    SlackListener,
     SpendPolicy,
 )
 from paygraph.gateways.mock import MockGateway
+from paygraph.listeners import SlackListener
 
 SIGNING_SECRET = "test-signing-secret"
 

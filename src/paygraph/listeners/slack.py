@@ -49,7 +49,6 @@ import time
 from typing import TYPE_CHECKING, Optional
 
 from paygraph.exceptions import SpendDeniedError, UnknownApprovalError
-from paygraph.gateways.slack import SlackApprovalGateway
 
 if TYPE_CHECKING:  # pragma: no cover
     from fastapi import FastAPI
@@ -132,14 +131,10 @@ class SlackListener:
     def _find_owner(self, request_id: str) -> Optional[tuple]:
         """Return ``(wallet, gateway_name)`` for the gateway that owns ``request_id``."""
         for wallet in self._wallets:
-            for name, gw in wallet._gateways.items():
-                if not isinstance(gw, SlackApprovalGateway):
-                    continue
-                try:
-                    gw.get_pending(request_id)
-                except KeyError:
-                    continue
-                return wallet, name
+            found = wallet.find_pending_approval(request_id)
+            if found is not None:
+                gateway_name, _ = found
+                return wallet, gateway_name
         return None
 
     def handle_payload(self, payload: dict) -> dict:
