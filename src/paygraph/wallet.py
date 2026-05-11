@@ -85,6 +85,27 @@ class AgentWallet:
             )
         return gw
 
+    def find_pending_approval(
+        self, request_id: str
+    ) -> tuple[str, SlackApprovalGateway] | None:
+        """Find the SlackApprovalGateway that owns ``request_id``.
+
+        Returns ``(gateway_name, gateway)`` for the first registered
+        ``SlackApprovalGateway`` whose pending store contains ``request_id``,
+        or ``None`` if no gateway owns it. Used by ``SlackListener`` to route
+        incoming Slack interaction payloads without reaching into wallet
+        internals.
+        """
+        for name, gw in self._gateways.items():
+            if not isinstance(gw, SlackApprovalGateway):
+                continue
+            try:
+                gw.get_pending(request_id)
+            except KeyError:
+                continue
+            return name, gw
+        return None
+
     def _execute_with_policy(
         self,
         gateway_name: str,
