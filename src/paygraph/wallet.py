@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from functools import cached_property
 
 from paygraph.audit import AuditLogger, AuditRecord
@@ -106,6 +107,10 @@ class AgentWallet:
             return name, gw
         return None
 
+    def _policy_snapshot(self) -> dict:
+        """Return the active SpendPolicy as a dict for audit-record snapshotting."""
+        return asdict(self.policy_engine.policy)
+
     def _execute_with_policy(
         self,
         gateway_name: str,
@@ -145,6 +150,7 @@ class AgentWallet:
                     policy_result="denied",
                     denial_reason=result.denial_reason,
                     checks_passed=result.checks_passed,
+                    policy_snapshot=self._policy_snapshot(),
                 )
             )
             raise PolicyViolationError(result.denial_reason)
@@ -164,6 +170,7 @@ class AgentWallet:
                     justification=justification,
                     policy_result="pending_approval",
                     checks_passed=result.checks_passed,
+                    policy_snapshot=self._policy_snapshot(),
                 )
             )
             try:
@@ -187,6 +194,7 @@ class AgentWallet:
                     policy_result="denied",
                     denial_reason="Human denied the spend request",
                     checks_passed=result.checks_passed,
+                    policy_snapshot=self._policy_snapshot(),
                 )
             )
             raise
@@ -200,6 +208,7 @@ class AgentWallet:
                     policy_result="denied",
                     denial_reason=f"Gateway error: {e}",
                     checks_passed=result.checks_passed,
+                    policy_snapshot=self._policy_snapshot(),
                 )
             )
             raise GatewayError(str(e)) from e
@@ -217,6 +226,7 @@ class AgentWallet:
                 checks_passed=result.checks_passed,
                 gateway_ref=spend_result.gateway_ref,
                 gateway_type=spend_result.gateway_type,
+                policy_snapshot=self._policy_snapshot(),
             )
         )
 
@@ -253,6 +263,7 @@ class AgentWallet:
                     policy_result="denied",
                     denial_reason=result.denial_reason,
                     checks_passed=result.checks_passed,
+                    policy_snapshot=self._policy_snapshot(),
                 )
             )
             raise PolicyViolationError(result.denial_reason)
@@ -273,6 +284,7 @@ class AgentWallet:
                     policy_result="denied",
                     denial_reason="Human denied the x402 payment request",
                     checks_passed=result.checks_passed,
+                    policy_snapshot=self._policy_snapshot(),
                 )
             )
             raise
@@ -286,6 +298,7 @@ class AgentWallet:
                     policy_result="denied",
                     denial_reason=f"Gateway error: {e}",
                     checks_passed=result.checks_passed,
+                    policy_snapshot=self._policy_snapshot(),
                 )
             )
             raise GatewayError(str(e)) from e
@@ -302,6 +315,7 @@ class AgentWallet:
                 checks_passed=result.checks_passed,
                 gateway_ref=spend_result.gateway_ref,
                 gateway_type=spend_result.gateway_type,
+                policy_snapshot=self._policy_snapshot(),
             )
         )
 
@@ -412,6 +426,7 @@ class AgentWallet:
                     justification=justification,
                     policy_result="denied",
                     denial_reason=str(e),
+                    policy_snapshot=self._policy_snapshot(),
                 )
             )
             raise
@@ -426,6 +441,7 @@ class AgentWallet:
                 policy_result="approved",
                 gateway_ref=card.gateway_ref,
                 gateway_type=card.gateway_type,
+                policy_snapshot=self._policy_snapshot(),
             )
         )
 

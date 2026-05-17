@@ -1,6 +1,9 @@
 import argparse
+import json
 import os
+import sys
 import tempfile
+from dataclasses import asdict
 
 from paygraph.exceptions import PolicyViolationError
 from paygraph.gateways.mock import MockGateway
@@ -361,6 +364,28 @@ def run_live_demo(model: str, stripe: bool = False, stripe_mpp: bool = False) ->
     os.unlink(audit_path)
 
 
+def run_replay(audit_log: str, policy_path: str, all_rows: bool, as_json: bool) -> int:
+    """Run the ``paygraph replay`` subcommand. Returns a process exit code."""
+    from paygraph.simulator import PolicySimulator, load_policy_json
+
+    if not os.path.exists(audit_log):
+        print(f"ERROR: audit log not found: {audit_log}", file=sys.stderr)
+        return 1
+    if not os.path.exists(policy_path):
+        print(f"ERROR: policy file not found: {policy_path}", file=sys.stderr)
+        return 1
+
+    candidate = load_policy_json(policy_path)
+    sim = PolicySimulator(candidate)
+    report = sim.replay_file(audit_log, only_approved=not all_rows)
+
+    if as_json:
+        print(json.dumps(asdict(report), indent=2))
+    else:
+        print(report.summary())
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="paygraph",
@@ -398,6 +423,26 @@ def main() -> None:
     mcp_sub = mcp_parser.add_subparsers(dest="mcp_command")
     mcp_sub.add_parser("serve", help="Run the PayGraph MCP server over stdio")
 
+    replay_parser = subparsers.add_parser(
+        "replay", help="Replay an audit log against a candidate SpendPolicy"
+    )
+    replay_parser.add_argument("audit_log", help="Path to audit JSONL file")
+    replay_parser.add_argument(
+        "--policy",
+        required=True,
+        help="Path to candidate SpendPolicy as JSON",
+    )
+    replay_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Re-evaluate denied rows too (default: only previously-approved rows)",
+    )
+    replay_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the ReplayReport as JSON instead of a human-readable table",
+    )
+
     args = parser.parse_args()
 
     if args.command == "demo":
@@ -408,6 +453,14 @@ def main() -> None:
             run_live_demo(args.model, stripe=args.stripe, stripe_mpp=args.stripe_mpp)
         else:
             run_demo()
+    elif args.command == "replay":
+        exit_code = run_replay(
+            audit_log=args.audit_log,
+            policy_path=args.policy,
+            all_rows=args.all,
+            as_json=args.json,
+        )
+        raise SystemExit(exit_code)
     elif args.command == "mcp":
         if args.mcp_command == "serve":
             from paygraph.mcp_server import _MCP_IMPORT_ERROR

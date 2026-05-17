@@ -24,6 +24,7 @@ from paygraph.gateways.stripe import StripeCardGateway
 from paygraph.gateways.stripe_mpp import StripeMPPGateway
 from paygraph.gateways.x402 import X402Gateway, X402Receipt
 from paygraph.policy import SpendPolicy
+from paygraph.simulator import PolicySimulator, ReplayOutcome, ReplayReport
 from paygraph.wallet import AgentWallet
 
 __all__ = [
@@ -51,4 +52,7 @@ __all__ = [
     "StripeUnreachableError",
     "HumanApprovalRequired",
     "UnknownApprovalError",
+    "PolicySimulator",
+    "ReplayOutcome",
+    "ReplayReport",
 ]
