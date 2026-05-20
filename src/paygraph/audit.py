@@ -52,6 +52,7 @@ class AuditRecord:
     checks_passed: list[str]
     gateway_ref: str | None
     gateway_type: str | None
+    policy_snapshot: dict | None = None
 
     @classmethod
     def now(
@@ -65,6 +66,7 @@ class AuditRecord:
         checks_passed: list[str] | None = None,
         gateway_ref: str | None = None,
         gateway_type: str | None = None,
+        policy_snapshot: dict | None = None,
     ) -> "AuditRecord":
         """Create an AuditRecord with the current UTC timestamp.
 
@@ -78,6 +80,10 @@ class AuditRecord:
             checks_passed: List of passed policy check names.
             gateway_ref: Gateway reference ID.
             gateway_type: Gateway type string.
+            policy_snapshot: Full ``SpendPolicy`` (as a dict) that was active
+                when this record was written. Enables deterministic replay of
+                historical records against a candidate policy. May be ``None``
+                for records written before this field was introduced.
 
         Returns:
             A new ``AuditRecord`` with ``timestamp`` set to now (UTC).
@@ -93,6 +99,7 @@ class AuditRecord:
             checks_passed=checks_passed or [],
             gateway_ref=gateway_ref,
             gateway_type=gateway_type,
+            policy_snapshot=policy_snapshot,
         )
 
 

@@ -82,8 +82,8 @@ class PolicyEngine:
         self._monthly_spend: float = 0.0
         self._monthly_start: datetime | None = None
 
-    def _reset_daily_if_needed(self) -> None:
-        today = date.today()
+    def _reset_daily_if_needed(self, now: datetime | None = None) -> None:
+        today = now.date() if now is not None else date.today()
         if today != self._current_date:
             self._daily_spend = 0.0
             self._current_date = today
@@ -139,7 +139,7 @@ class PolicyEngine:
         """
         if now is None:
             now = datetime.now()
-        self._reset_daily_if_needed()
+        self._reset_daily_if_needed(now)
         self._reset_hourly_if_needed(now)
         self._reset_weekly_if_needed(now)
         self._reset_monthly_if_needed(now)
@@ -246,7 +246,7 @@ class PolicyEngine:
         """
         if now is None:
             now = datetime.now()
-        self._reset_daily_if_needed()
+        self._reset_daily_if_needed(now)
         self._daily_spend += amount
         if self.policy.hourly_budget is not None:
             self._reset_hourly_if_needed(now)

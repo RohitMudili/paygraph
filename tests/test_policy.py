@@ -1,5 +1,4 @@
-from datetime import date
-from unittest.mock import patch
+from datetime import datetime
 
 from paygraph.policy import PolicyEngine, SpendPolicy
 
@@ -149,16 +148,15 @@ class TestDailyBudget:
 
     def test_resets_on_new_day(self):
         engine = PolicyEngine(SpendPolicy(max_transaction=100.0, daily_budget=100.0))
-        engine.evaluate(80.0, "vendor", "reason")
-        engine.commit_spend(80.0)
+        # Use the explicit ``now=`` kwarg to drive the day-rollover deterministically.
+        engine.evaluate(80.0, "vendor", "reason", now=datetime(2099, 1, 1, 12, 0))
+        engine.commit_spend(80.0, now=datetime(2099, 1, 1, 12, 0))
 
         # Simulate next day
-        tomorrow = date(2099, 1, 2)
-        with patch("paygraph.policy.date") as mock_date:
-            mock_date.today.return_value = tomorrow
-            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
-            result = engine.evaluate(80.0, "vendor", "reason")
-            assert result.approved
+        result = engine.evaluate(
+            80.0, "vendor", "reason", now=datetime(2099, 1, 2, 12, 0)
+        )
+        assert result.approved
 
 
 class TestCommitSpend:
