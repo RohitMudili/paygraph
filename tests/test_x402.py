@@ -368,6 +368,11 @@ class TestX402GatewayHeaderParsing:
     """Direct test of X402Gateway.execute_async parsing the payment-response header."""
 
     def test_parses_settled_amount_from_header(self):
+        # X402Gateway.execute_async imports x402.http.clients at call time,
+        # so this test needs the optional [x402] extra installed. Skip when
+        # it's not available (default CI matrix).
+        pytest.importorskip("x402")
+
         import base64
         import json as _json
         from unittest.mock import AsyncMock, MagicMock
